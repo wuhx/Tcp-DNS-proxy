@@ -24,17 +24,19 @@ import os, sys
 import socket
 import struct
 import threading
-import socketserver
+import SocketServer
 import traceback
 import random
 import optparse
+import localdnsd
+
 from pylru import lrucache
 
 try:
     import gevent
     from gevent import monkey
 except:
-    print("Install gevent will save a lot of CPU time\n")
+    print "Install gevent will save a lot of CPU time\n"
 else:
     monkey.patch_all()
 
@@ -63,7 +65,7 @@ LRUCACHE = None
 def hexdump( src, width=16 ):
     FILTER=''.join([(len(repr(chr(x)))==3) and chr(x) or '.' for x in range(256)])
     result=[]
-    for i in range(0, len(src), width):
+    for i in xrange(0, len(src), width):
         s = src[i:i+width]
         hexa = ' '.join(["%02X"%ord(x) for x in s])
         printable = s.translate(FILTER)
@@ -104,11 +106,23 @@ def QueryDNS(server, port, querydata):
         s.connect((server, int(port)))
         s.send(sendbuf)
         data = s.recv(2048)
-    except Exception as e:
-        print('[ERROR] QueryDNS: %s' %  e.message)
+    except Exception, e:
+        print '[ERROR] QueryDNS: %s' %  e.message
     finally:
         if s: s.close()
         return data
+
+def respuesta(data, ip):
+    packet=''
+    packet+=data[:2] + "\x81\x80"
+    packet+=data[4:6] + data[4:6] + '\x00\x00\x00\x00'   # Questions and Answers Counts
+    packet+=data[12:]                                         # Original Domain Name Question
+    packet+='\xc0\x0c'                                             # Pointer to domain name
+    packet+='\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04'             # Response type, ttl and resource data length -> 4 bytes
+    packet+=str.join('',map(lambda x: chr(int(x)), ip.split('.'))) # 4bytes of IP
+    #print 'package...'
+    #print  packet
+    return packet
 
 #-----------------------------------------------------
 # send udp dns respones back to client program
@@ -117,10 +131,18 @@ def transfer(querydata, addr, server):
     if not querydata: return
 
     domain = bytetodomain(querydata[12:-4])
+
+    if "somelolita.com" in domain:
+        print "xun.im>>>>>>>>>>>"
+        response = respuesta(querydata, "127.0.0.1")
+        server.sendto(response, addr)
+
+
+
     qtype = struct.unpack('!h', querydata[-4:-2])[0]
 
-    print('domain:%s, qtype:%x, thread:%d' % \
-         (domain, qtype, threading.activeCount()))
+    print 'domain:%s, qtype:%x, thread:%d' % \
+         (domain, qtype, threading.activeCount())
     sys.stdout.flush()
 
     response=None
@@ -152,22 +174,28 @@ def transfer(querydata, addr, server):
         break
 
     if response is None:
-        print("[ERROR] Tried many times and failed to resolve %s" % domain)
+        print "[ERROR] Tried many times and failed to resolve %s" % domain
 
-class ThreadedUDPServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
+class ThreadedUDPServer(SocketServer.ThreadingMixIn, SocketServer.UDPServer):
     def __init__(self, s, t):
-        socketserver.UDPServer.__init__(self, s, t)
+        SocketServer.UDPServer.__init__(self, s, t)
 
-class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
+class ThreadedUDPRequestHandler(SocketServer.BaseRequestHandler):
     # Ctrl-C will cleanly kill all spawned threads
     daemon_threads = True
     # much faster rebinding
     allow_reuse_address = True
 
     def handle(self):
+        print "............"
+        print self.request
+        print "............."
+
         data = self.request[0]
         socket = self.request[1]
         addr = self.client_address
+
+
         transfer(data, addr, socket)
 
 #------------------------------------------------------
@@ -183,9 +211,9 @@ if __name__ == "__main__":
     if CACHE:
         LRUCACHE = lrucache(100)
 
-    print('>> Please wait program init....')
-    print('>> Init finished!')
-    print('>> Now you can set dns server to 127.0.0.1')
+    print '>> Please wait program init....'
+    print '>> Init finished!'
+    print '>> Now you can set dns server to 127.0.0.1'
 
     server = ThreadedUDPServer(('127.0.0.1', 53), ThreadedUDPRequestHandler)
 
